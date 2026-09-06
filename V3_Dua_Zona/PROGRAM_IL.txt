@@ -1,0 +1,188 @@
+PROYEK V3 - CONVEYOR DUA ZONA ZERO-PRESSURE
+PLC: Schneider Modicon M221 TM221CE24R
+
+TUJUAN
+- Dua conveyor zona dengan pelepasan berdasarkan kesiapan zona berikut.
+- Manual jog untuk maintenance.
+- Jam alarm terpisah tiap zona.
+- Alarm dilatch dan harus di-reset setelah kondisi macet hilang.
+
+ALAMAT INPUT
+%I0.0  START_PB
+%I0.1  STOP_OK
+%I0.2  ESTOP_OK
+%I0.3  OL_ZONE1_OK
+%I0.4  OL_ZONE2_OK
+%I0.5  SENSOR_INFEED
+%I0.6  SENSOR_ZONE1
+%I0.7  SENSOR_ZONE2
+%I0.8  DOWNSTREAM_READY
+%I0.9  RESET_PB
+
+ALAMAT OUTPUT
+%Q0.0  MOTOR_ZONE1
+%Q0.1  MOTOR_ZONE2
+%Q0.4  BUZZER
+%Q0.5  LAMP_RUN
+%Q0.6  LAMP_FAULT
+
+MEMORY BIT / HMI
+%M0    AUTO_MODE
+%M1    START_HMI
+%M2    STOP_HMI
+%M3    JOG_ZONE1
+%M4    JOG_ZONE2
+%M5    RESET_HMI
+%M10   SYSTEM_RUN
+%M11   SAFETY_OK
+%M12   AUTO_ZONE1_CMD
+%M13   AUTO_ZONE2_CMD
+%M14   FINAL_ZONE1_CMD
+%M15   FINAL_ZONE2_CMD
+%M20   JAM_ZONE1_LATCH
+%M21   JAM_ZONE2_LATCH
+%M22   ALARM_ACTIVE
+%M23   RESET_REQUEST
+%M30   PRODUCT_DEMAND_ZONE1
+%M31   MANUAL_JOG_ZONE1
+%M32   MANUAL_JOG_ZONE2
+
+PARAMETER SOFTWARE OBJECT
+%TM0  JAM_TIMER_ZONE1       Type=TON, Time Base=100 ms, Preset=80 (8 s)
+%TM1  JAM_TIMER_ZONE2       Type=TON, Time Base=100 ms, Preset=80 (8 s)
+
+CATATAN FILE PROYEK SMBP
+Versi .smbp menggunakan %C0/%C1 dan pulsa %S6 agar tidak bergantung time-base
+timer. Penulisan preset yang benar di IL M221 menggunakan operation block:
+LD %S13
+[ %C0.P := 8 ]
+
+(* NETWORK 1 - interlock dasar *)
+LD     %I0.1
+AND    %I0.2
+AND    %I0.3
+AND    %I0.4
+ANDN   %M2
+ST     %M11
+
+(* NETWORK 2 - reset request panel/HMI *)
+LD     %I0.9
+OR     %M5
+ST     %M23
+
+(* NETWORK 3 - latch run; pindah ke manual melepas latch produksi *)
+LD     %I0.0
+OR     %M1
+OR     %M10
+AND    %M0
+AND    %M11
+ST     %M10
+
+(* NETWORK 4 - zona 2 mengosongkan produk ke downstream *)
+LD     %M10
+AND    %I0.7
+AND    %I0.8
+ANDN   %M22
+ST     %M13
+
+(* NETWORK 5 - zona 1 boleh bergerak bila zona 2 kosong atau sedang melepas *)
+LD     %I0.5
+OR     %I0.6
+ST     %M30
+
+LDN    %I0.7
+OR     %M13
+AND    %M10
+ANDN   %M22
+AND    %M30
+ST     %M12
+
+(* NETWORK 6 - jam timer zona 1 *)
+BLK    %TM0
+LD     %M12
+AND    %I0.6
+IN
+END_BLK
+
+(* NETWORK 7 - jam timer zona 2 *)
+BLK    %TM1
+LD     %M13
+AND    %I0.7
+IN
+END_BLK
+
+(* NETWORK 8 - latch jam zona 1 *)
+LD     %TM0.Q
+S      %M20
+
+(* NETWORK 9 - latch jam zona 2 *)
+LD     %TM1.Q
+S      %M21
+
+(* NETWORK 10 - reset jam zona 1 hanya bila sensor bebas *)
+LD     %M23
+ANDN   %I0.6
+R      %M20
+
+(* NETWORK 11 - reset jam zona 2 hanya bila sensor bebas *)
+LD     %M23
+ANDN   %I0.7
+R      %M21
+
+(* NETWORK 12 - alarm umum *)
+LD     %M20
+OR     %M21
+ORN    %I0.2
+ORN    %I0.3
+ORN    %I0.4
+ST     %M22
+
+(* NETWORK 13 - final command zona 1: auto atau jog maintenance *)
+LD     %M3
+ANDN   %M0
+ST     %M31
+
+LD     %M12
+OR     %M31
+AND    %M11
+ANDN   %M22
+ST     %M14
+
+(* NETWORK 14 - final command zona 2 *)
+LD     %M4
+ANDN   %M0
+ST     %M32
+
+LD     %M13
+OR     %M32
+AND    %M11
+ANDN   %M22
+ST     %M15
+
+(* NETWORK 15 - output *)
+LD     %M14
+ST     %Q0.0
+
+(* NETWORK 16 - output *)
+LD     %M15
+ST     %Q0.1
+
+(* NETWORK 17 - indikator *)
+LD     %M10
+ANDN   %M22
+ST     %Q0.5
+
+(* NETWORK 18 - fault lamp dan buzzer *)
+LD     %M22
+ST     %Q0.6
+
+LD     %M22
+ST     %Q0.4
+
+UJI PENERIMAAN
+1. Uji manual jog tiap motor dengan AUTO_MODE=0.
+2. Auto: barang pada zona 1 tidak boleh dilepas bila zona 2 penuh dan diam.
+3. Saat DOWNSTREAM_READY=1, zona 2 melepas; zona 1 boleh mengikuti.
+4. Tahan SENSOR_ZONE1 aktif saat motor zona 1 berjalan >8 s; jam harus latch.
+5. RESET tidak boleh menghapus jam selama sensor terkait masih aktif.
+6. Uji overload masing-masing motor dan feedback E-Stop.

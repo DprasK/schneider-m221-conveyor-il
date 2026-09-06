@@ -1,0 +1,275 @@
+PROYEK V4 - SORTING CONVEYOR TIGA JALUR
+PLC: Schneider Modicon M221 TM221CE24R
+
+TUJUAN
+- Klasifikasi produk A, B, atau reject pada tepi naik sensor masuk.
+- Conveyor berhenti saat pusher/gate aktif lalu melanjutkan ke sensor keluar.
+- Timeout sequence, bin-full handling, dan counter per kategori.
+
+ALAMAT INPUT
+%I0.0  START_PB
+%I0.1  STOP_OK
+%I0.2  ESTOP_OK
+%I0.3  OVERLOAD_OK
+%I0.4  ENTRY_SENSOR
+%I0.5  TYPE_A_SENSOR
+%I0.6  TYPE_B_SENSOR
+%I0.7  PUSHER_HOME
+%I0.8  EXIT_SENSOR
+%I0.9  BIN_A_AVAILABLE
+%I0.10 BIN_B_AVAILABLE
+%I0.11 REJECT_BIN_AVAILABLE
+%I0.12 RESET_PB
+
+ALAMAT OUTPUT
+%Q0.0  MOTOR_CONVEYOR
+%Q0.1  PUSHER_A
+%Q0.2  PUSHER_B
+%Q0.3  REJECT_GATE
+%Q0.4  LAMP_RUN
+%Q0.5  LAMP_BUSY
+%Q0.6  LAMP_FAULT
+%Q0.7  BUZZER
+
+MEMORY BIT / HMI
+%M0    AUTO_MODE
+%M1    START_HMI
+%M2    STOP_HMI
+%M3    AUTO_ENABLE
+%M10   RUN_MEMORY
+%M11   SAFETY_OK
+%M20   PRODUCT_A_LATCH
+%M21   PRODUCT_B_LATCH
+%M22   PRODUCT_REJECT_LATCH
+%M23   SORT_BUSY
+%M24   TRANSPORT_DONE
+%M25   PUSH_ACTIVE
+%M26   PUSH_DONE
+%M27   EXIT_PULSE
+%M30   JAM_ALARM_LATCH
+%M31   BIN_ALARM_LATCH
+%M32   ALARM_ACTIVE
+%M40   RESET_HMI
+%M41   RESET_COUNTERS_HMI
+%M42   RESET_REQUEST
+
+PARAMETER SOFTWARE OBJECT
+%TM0 TRANSPORT_TIMER        Type=TON, Time Base=100 ms, Preset=20 (2.0 s)
+%TM1 PUSH_TIMER             Type=TON, Time Base=100 ms, Preset=7  (0.7 s)
+%TM2 SEQUENCE_TIMEOUT       Type=TON, Time Base=100 ms, Preset=80 (8.0 s)
+%C0  COUNT_A                Preset sesuai target produksi
+%C1  COUNT_B                Preset sesuai target produksi
+%C2  COUNT_REJECT           Preset sesuai target produksi
+
+(* NETWORK 1 - safety *)
+LD     %I0.1
+AND    %I0.2
+AND    %I0.3
+ANDN   %M2
+ST     %M11
+
+(* NETWORK 2 - run latch hanya mode auto *)
+LD     %I0.0
+OR     %M1
+OR     %M10
+AND    %M0
+AND    %M3
+AND    %M11
+ST     %M10
+
+(* NETWORK 3 - reset request *)
+LD     %I0.12
+OR     %M40
+ST     %M42
+
+(* NETWORK 4 - tangkap produk A *)
+LDR    %I0.4
+AND    %M10
+ANDN   %M23
+AND    %I0.5
+AND    %I0.9
+S      %M20
+
+(* NETWORK 5 - tangkap produk B *)
+LDR    %I0.4
+AND    %M10
+ANDN   %M23
+ANDN   %I0.5
+AND    %I0.6
+AND    %I0.10
+S      %M21
+
+(* NETWORK 6 - selain A/B yang tersedia diarahkan reject *)
+LDR    %I0.4
+AND    %M10
+ANDN   %M23
+ANDN   %M20
+ANDN   %M21
+AND    %I0.11
+S      %M22
+
+(* NETWORK 7 - reject bin penuh saat perlu reject *)
+LDR    %I0.4
+AND    %M10
+ANDN   %M23
+ANDN   %M20
+ANDN   %M21
+ANDN   %I0.11
+S      %M31
+
+(* NETWORK 8 - mulai sequence jika salah satu klasifikasi berhasil *)
+LD     %M20
+OR     %M21
+OR     %M22
+S      %M23
+
+(* NETWORK 9 - transport ke aktuator *)
+BLK    %TM0
+LD     %M23
+ANDN   %M24
+IN
+END_BLK
+
+(* NETWORK 10 - tandai posisi aktuator dan mulai pusher *)
+LD     %TM0.Q
+AND    %I0.7
+S      %M24
+
+LD     %TM0.Q
+AND    %I0.7
+S      %M25
+
+(* NETWORK 11 - durasi pusher/gate *)
+BLK    %TM1
+LD     %M25
+IN
+END_BLK
+
+(* NETWORK 12 - akhir pusher *)
+LD     %TM1.Q
+ST     %M26
+
+LD     %M26
+R      %M25
+
+(* NETWORK 13 - timeout seluruh sequence sampai exit *)
+BLK    %TM2
+LD     %M23
+IN
+END_BLK
+
+LD     %TM2.Q
+S      %M30
+
+(* NETWORK 14 - pulse sensor keluar *)
+LDR    %I0.8
+AND    %M23
+ST     %M27
+
+(* NETWORK 15 - counter A *)
+BLK    %C0
+LD     %M27
+AND    %M20
+CU
+LD     %M41
+R
+END_BLK
+
+(* NETWORK 16 - counter B *)
+BLK    %C1
+LD     %M27
+AND    %M21
+CU
+LD     %M41
+R
+END_BLK
+
+(* NETWORK 17 - counter reject *)
+BLK    %C2
+LD     %M27
+AND    %M22
+CU
+LD     %M41
+R
+END_BLK
+
+(* NETWORK 18 - bersihkan sequence setelah exit *)
+LD     %M27
+R      %M25
+
+LD     %M27
+R      %M24
+
+LD     %M27
+R      %M23
+
+LD     %M27
+R      %M20
+
+LD     %M27
+R      %M21
+
+LD     %M27
+R      %M22
+
+(* NETWORK 19 - reset alarm setelah penyebab hilang *)
+LD     %M42
+ANDN   %I0.4
+AND    %I0.7
+R      %M30
+
+LD     %M42
+AND    %I0.11
+R      %M31
+
+(* NETWORK 20 - alarm umum *)
+LD     %M30
+OR     %M31
+ORN    %I0.2
+ORN    %I0.3
+ST     %M32
+
+(* NETWORK 21 - motor berhenti selama push atau alarm *)
+LD     %M10
+AND    %M11
+ANDN   %M25
+ANDN   %M32
+ST     %Q0.0
+
+(* NETWORK 22 - aktuator hanya satu sesuai latch *)
+LD     %M25
+AND    %M20
+AND    %M11
+ST     %Q0.1
+
+LD     %M25
+AND    %M21
+AND    %M11
+ST     %Q0.2
+
+LD     %M25
+AND    %M22
+AND    %M11
+ST     %Q0.3
+
+(* NETWORK 23 - indikator *)
+LD     %M10
+ANDN   %M32
+ST     %Q0.4
+
+LD     %M23
+ST     %Q0.5
+
+LD     %M32
+ST     %Q0.6
+
+LD     %M32
+ST     %Q0.7
+
+UJI PENERIMAAN
+1. Simulasikan A, B, dan reject; pastikan hanya satu latch/aktuator aktif.
+2. Pastikan produk kedua diabaikan ketika SORT_BUSY=1.
+3. Pastikan motor berhenti selama PUSH_ACTIVE dan hidup lagi sesudahnya.
+4. Sensor EXIT harus menambah counter yang tepat dan membersihkan sequence.
+5. Hilangkan EXIT; setelah 8 s JAM_ALARM_LATCH harus aktif.
+6. Penuhkan reject bin dan kirim produk reject; sistem harus alarm tanpa aktuasi.

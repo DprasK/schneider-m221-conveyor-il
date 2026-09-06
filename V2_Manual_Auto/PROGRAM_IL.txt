@@ -1,0 +1,106 @@
+PROYEK V2 - SATU CONVEYOR MANUAL/AUTO
+PLC: Schneider Modicon M221 TM221CE24R
+Software: EcoStruxure Machine Expert - Basic
+
+TUJUAN
+- Manual: start latch dari panel/HMI.
+- Auto: conveyor mengikuti sensor produk dan downstream ready.
+- Tail-run 2 detik setelah produk meninggalkan sensor.
+- Stop, E-Stop feedback, dan overload mematikan output.
+
+ALAMAT INPUT
+%I0.0  START_PB             Tombol start NO
+%I0.1  STOP_OK              Kontak stop NC; 1 = sehat
+%I0.2  ESTOP_OK             Feedback safety relay; 1 = sehat
+%I0.3  OVERLOAD_OK          Kontak overload NC; 1 = sehat
+%I0.4  PRODUCT_SENSOR       Sensor barang
+%I0.5  DOWNSTREAM_READY     Mesin berikut siap
+
+ALAMAT OUTPUT
+%Q0.0  MOTOR_CONVEYOR       Kontaktor/VFD run
+%Q0.8  LAMP_RUN             Lampu hijau
+%Q0.9  LAMP_FAULT           Lampu merah
+
+MEMORY BIT / HMI
+%M0    AUTO_MODE            0 manual; 1 auto
+%M1    START_HMI            Tombol start HMI momentary
+%M2    STOP_HMI             Perintah stop HMI
+%M3    AUTO_ENABLE          Izin produksi otomatis
+%M10   RUN_MEMORY           Latch sistem berjalan
+%M11   SAFETY_OK            Ringkasan interlock
+%M12   MANUAL_DEMAND        Permintaan manual
+%M13   AUTO_RAW             Permintaan auto sebelum tail-run
+%M14   AUTO_DEMAND          Permintaan auto sesudah tail-run
+%M15   FAULT_ACTIVE         E-Stop/overload fault
+
+PARAMETER SOFTWARE OBJECT
+%TM0  AUTO_TAIL_TIMER       Type=TOF, Time Base=100 ms, Preset=20 (2.0 s)
+
+(* NETWORK 1 - ringkasan interlock *)
+LD     %I0.1
+AND    %I0.2
+AND    %I0.3
+ANDN   %M2
+ST     %M11
+
+(* NETWORK 2 - fault yang benar-benar perlu alarm *)
+LDN    %I0.2
+ORN    %I0.3
+ST     %M15
+
+(* NETWORK 3 - permintaan manual dengan self-hold *)
+LD     %I0.0
+OR     %M1
+OR     %M10
+ANDN   %M0
+AND    %M11
+ST     %M12
+
+(* NETWORK 4 - permintaan auto mentah *)
+LD     %M0
+AND    %M3
+AND    %I0.4
+AND    %I0.5
+AND    %M11
+ST     %M13
+
+(* NETWORK 5 - tail-run auto *)
+BLK    %TM0
+LD     %M13
+IN
+END_BLK
+
+(* NETWORK 6 - permintaan auto setelah timer *)
+LD     %M0
+AND    %TM0.Q
+AND    %M11
+ST     %M14
+
+(* NETWORK 7 - latch/perintah sistem *)
+LD     %M12
+OR     %M14
+AND    %M11
+ST     %M10
+
+(* NETWORK 8 - output motor *)
+LD     %M10
+AND    %M11
+ST     %Q0.0
+
+(* NETWORK 9 - lampu run *)
+LD     %Q0.0
+ST     %Q0.8
+
+(* NETWORK 10 - lampu fault *)
+LD     %M15
+ST     %Q0.9
+
+UJI PENERIMAAN
+1. Lepaskan daya motor. Online monitor hanya dengan output aman.
+2. Set STOP_OK, ESTOP_OK, OVERLOAD_OK = 1.
+3. Manual: AUTO_MODE=0, tekan START_PB; output harus latch.
+4. Tekan STOP atau STOP_HMI; output harus mati.
+5. Auto: AUTO_MODE=1, AUTO_ENABLE=1, DOWNSTREAM_READY=1.
+6. Aktifkan PRODUCT_SENSOR; motor hidup. Lepaskan sensor; motor mati setelah 2 s.
+7. Putus ESTOP_OK atau OVERLOAD_OK; motor mati dan LAMP_FAULT hidup.
+

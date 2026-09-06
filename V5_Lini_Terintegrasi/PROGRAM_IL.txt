@@ -1,0 +1,335 @@
+PROYEK V5 - LINI TIGA CONVEYOR TERINTEGRASI
+PLC: Schneider Modicon M221 TM221CE24R
+
+TUJUAN
+- Infeed, transfer, dan outfeed dengan start bertahap dari hilir ke hulu.
+- Kontrol buffer agar produk tidak menumpuk.
+- Stasiun inspeksi OK/NG dan reject pneumatik.
+- Manual maintenance jog, jam alarm per zona, counter good/reject.
+
+ALAMAT INPUT
+%I0.0  START_PB
+%I0.1  STOP_OK
+%I0.2  ESTOP_OK
+%I0.3  OL_INFEED_OK
+%I0.4  OL_TRANSFER_OK
+%I0.5  OL_OUTFEED_OK
+%I0.6  SENSOR_INFEED
+%I0.7  SENSOR_BUFFER1
+%I0.8  SENSOR_BUFFER2
+%I0.9  SENSOR_INSPECTION
+%I0.10 QUALITY_OK
+%I0.11 REJECT_HOME
+%I0.12 EXIT_SENSOR
+%I0.13 RESET_PB
+
+ALAMAT OUTPUT
+%Q0.0  MOTOR_INFEED
+%Q0.1  MOTOR_TRANSFER
+%Q0.2  MOTOR_OUTFEED
+%Q0.3  REJECT_SOLENOID
+%Q0.4  BUZZER
+%Q0.5  LAMP_RUN
+%Q0.6  LAMP_MAINTENANCE
+%Q0.7  LAMP_FAULT
+
+MEMORY BIT / HMI
+%M0    AUTO_MODE
+%M1    START_HMI
+%M2    STOP_HMI
+%M3    JOG_INFEED
+%M4    JOG_TRANSFER
+%M5    JOG_OUTFEED
+%M6    RESET_HMI
+%M7    MAINTENANCE_ENABLE
+%M10   SYSTEM_RUN
+%M11   SAFETY_OK
+%M12   OUTFEED_AUTO_CMD
+%M13   TRANSFER_AUTO_CMD
+%M14   INFEED_AUTO_CMD
+%M15   INFEED_FINAL_CMD
+%M16   TRANSFER_FINAL_CMD
+%M17   OUTFEED_FINAL_CMD
+%M20   TRANSFER_STAGE_READY
+%M21   INFEED_STAGE_READY
+%M22   REJECT_REQUEST
+%M23   REJECT_ACTIVE
+%M24   PRODUCT_REJECTED
+%M25   EXIT_PULSE
+%M26   RESET_REQUEST
+%M30   JAM_INFEED
+%M31   JAM_TRANSFER
+%M32   JAM_OUTFEED
+%M33   REJECT_NOT_HOME
+%M34   ALARM_ACTIVE
+%M40   RESET_COUNTERS_HMI
+%M41   MANUAL_INFEED_CMD
+%M42   MANUAL_TRANSFER_CMD
+%M43   MANUAL_OUTFEED_CMD
+
+PARAMETER SOFTWARE OBJECT
+%TM0 TRANSFER_START_DELAY   Type=TON, Time Base=100 ms, Preset=10 (1.0 s)
+%TM1 INFEED_START_DELAY     Type=TON, Time Base=100 ms, Preset=10 (1.0 s)
+%TM2 REJECT_POSITION_DELAY  Type=TON, Time Base=100 ms, Preset=5  (0.5 s)
+%TM3 REJECT_PULSE_TIMER     Type=TON, Time Base=100 ms, Preset=7  (0.7 s)
+%TM4 JAM_INFEED_TIMER       Type=TON, Time Base=100 ms, Preset=100 (10 s)
+%TM5 JAM_TRANSFER_TIMER     Type=TON, Time Base=100 ms, Preset=100 (10 s)
+%TM6 JAM_OUTFEED_TIMER      Type=TON, Time Base=100 ms, Preset=100 (10 s)
+%TM7 REJECT_HOME_TIMEOUT    Type=TON, Time Base=100 ms, Preset=30 (3 s)
+%C0  GOOD_PRODUCT_COUNT     Preset sesuai target produksi
+%C1  REJECT_PRODUCT_COUNT   Preset sesuai target produksi
+
+(* NETWORK 1 - safety chain feedback *)
+LD     %I0.1
+AND    %I0.2
+AND    %I0.3
+AND    %I0.4
+AND    %I0.5
+ANDN   %M2
+ST     %M11
+
+(* NETWORK 2 - run latch auto *)
+LD     %I0.0
+OR     %M1
+OR     %M10
+AND    %M0
+AND    %M11
+ST     %M10
+
+(* NETWORK 3 - reset request *)
+LD     %I0.13
+OR     %M6
+ST     %M26
+
+(* NETWORK 4 - start hilir langsung; transfer setelah 1 s *)
+LD     %M10
+ANDN   %M34
+ST     %M12
+
+BLK    %TM0
+LD     %M12
+IN
+END_BLK
+
+LD     %TM0.Q
+ST     %M20
+
+(* NETWORK 5 - infeed satu detik setelah transfer ready *)
+BLK    %TM1
+LD     %M20
+IN
+END_BLK
+
+LD     %TM1.Q
+ST     %M21
+
+(* NETWORK 6 - auto command dengan kontrol buffer *)
+LD     %M21
+ANDN   %I0.7
+ANDN   %M34
+ST     %M14
+
+LD     %M20
+ANDN   %I0.8
+ANDN   %M34
+ST     %M13
+
+LD     %M12
+ANDN   %M23
+ANDN   %M34
+ST     %M12
+
+(* NETWORK 7 - inspeksi NG dilatch *)
+LDR    %I0.9
+ANDN   %I0.10
+AND    %M10
+S      %M22
+
+LD     %M22
+S      %M24
+
+(* NETWORK 8 - delay posisi reject *)
+BLK    %TM2
+LD     %M22
+AND    %I0.11
+IN
+END_BLK
+
+LD     %TM2.Q
+S      %M23
+
+(* NETWORK 9 - durasi solenoid reject *)
+BLK    %TM3
+LD     %M23
+IN
+END_BLK
+
+LD     %TM3.Q
+R      %M23
+
+LD     %TM3.Q
+R      %M22
+
+(* NETWORK 10 - jam monitoring *)
+BLK    %TM4
+LD     %M14
+AND    %I0.7
+IN
+END_BLK
+
+LD     %TM4.Q
+S      %M30
+
+BLK    %TM5
+LD     %M13
+AND    %I0.8
+IN
+END_BLK
+
+LD     %TM5.Q
+S      %M31
+
+BLK    %TM6
+LD     %M12
+AND    %I0.12
+IN
+END_BLK
+
+LD     %TM6.Q
+S      %M32
+
+(* NETWORK 11 - pusher harus kembali home setelah reject *)
+BLK    %TM7
+LD     %M24
+ANDN   %M23
+ANDN   %I0.11
+IN
+END_BLK
+
+LD     %TM7.Q
+S      %M33
+
+(* NETWORK 12 - reset fault terkontrol *)
+LD     %M26
+ANDN   %I0.7
+R      %M30
+
+LD     %M26
+ANDN   %I0.8
+R      %M31
+
+LD     %M26
+ANDN   %I0.12
+R      %M32
+
+LD     %M26
+AND    %I0.11
+R      %M33
+
+(* NETWORK 13 - alarm umum *)
+LD     %M30
+OR     %M31
+OR     %M32
+OR     %M33
+ORN    %I0.2
+ORN    %I0.3
+ORN    %I0.4
+ORN    %I0.5
+ST     %M34
+
+(* NETWORK 14 - final commands auto/manual maintenance *)
+LD     %M3
+ANDN   %M0
+AND    %M7
+ST     %M41
+
+LD     %M14
+OR     %M41
+AND    %M11
+ANDN   %M34
+ST     %M15
+
+LD     %M4
+ANDN   %M0
+AND    %M7
+ST     %M42
+
+LD     %M13
+OR     %M42
+AND    %M11
+ANDN   %M34
+ST     %M16
+
+LD     %M5
+ANDN   %M0
+AND    %M7
+ST     %M43
+
+LD     %M12
+OR     %M43
+AND    %M11
+ANDN   %M34
+ST     %M17
+
+(* NETWORK 15 - physical outputs *)
+LD     %M15
+ST     %Q0.0
+
+LD     %M16
+ST     %Q0.1
+
+LD     %M17
+ST     %Q0.2
+
+LD     %M23
+AND    %M11
+ANDN   %M34
+ST     %Q0.3
+
+(* NETWORK 16 - exit pulse dan counter *)
+LDR    %I0.12
+ST     %M25
+
+BLK    %C0
+LD     %M25
+ANDN   %M24
+CU
+LD     %M40
+R
+END_BLK
+
+BLK    %C1
+LD     %M25
+AND    %M24
+CU
+LD     %M40
+R
+END_BLK
+
+LD     %M25
+R      %M24
+
+(* NETWORK 17 - indicators *)
+LD     %M10
+ANDN   %M34
+ST     %Q0.5
+
+LDN    %M0
+AND    %M7
+ST     %Q0.6
+
+LD     %M34
+ST     %Q0.7
+
+LD     %M34
+ST     %Q0.4
+
+UJI PENERIMAAN
+1. Start auto: OUTFEED hidup, TRANSFER +1 s, INFEED +1 s berikutnya.
+2. SENSOR_BUFFER1 menghentikan infeed; SENSOR_BUFFER2 menghentikan transfer.
+3. Produk QUALITY_OK=1 tidak mengaktifkan reject dan menambah GOOD counter di exit.
+4. Produk QUALITY_OK=0 menjalankan delay 0.5 s dan reject 0.7 s, lalu menambah REJECT counter.
+5. Tahan tiap sensor jam selama motor terkait aktif >10 s; alarm zona harus latch.
+6. Pusher yang gagal kembali REJECT_HOME harus menghasilkan alarm setelah 3 s.
+7. Dalam maintenance, AUTO_MODE=0 dan MAINTENANCE_ENABLE=1; uji tiap jog.
+8. Semua output harus mati saat E-Stop/Stop/overload dibuka.

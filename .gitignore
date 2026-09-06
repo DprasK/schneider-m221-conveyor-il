@@ -1,0 +1,14 @@
+# Diagnostic and superseded Machine Expert projects
+**/DIAG_*.smbp
+**/*REV2_OPENABLE.smbp
+V4_Sortir_3_Jalur/SORTING_3_WAY_TM221CE24R.smbp
+V5_Lini_Terintegrasi/INTEGRATED_3_CONVEYOR_TM221CE24R.smbp
+V3_Dua_Zona/CONVEYOR_2_ZONE_ZPA_TM221CE24R.smbp
+
+# Local/generated archives
+*.zip
+
+# Machine Expert temporary files
+*.bak
+*.tmp
+~$*
